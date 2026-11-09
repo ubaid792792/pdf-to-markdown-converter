@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media to Markdown Converter</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --surface: #181a20;
+      --surface-hover: #22252d;
+      --border: #2d3240;
+      --text: #e6e9ef;
+      --text-muted: #8a90a0;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --radius: 12px;
+      --shadow: 0 4px 12px rgba(0,0,0,0.3);
+      --font-mono: 'Fira Code', 'Consolas', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .container {
+      width: 100%;
+      max-width: 900px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 2rem;
+      border: 1px solid var(--border);
+    }
+    header { text-align: center; margin-bottom: 2rem; }
+    header h1 { font-size: 1.8rem; margin-bottom: 0.5rem; background: linear-gradient(135deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    header p { color: var(--text-muted); }
+
+    .input-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      background: var(--bg);
+    }
+    .input-zone:hover, .input-zone.dragover { border-color: var(--accent); background: rgba(59, 130, 246, 0.05); }
+    .input-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .input-zone p { margin: 0.5rem 0 0; color: var(--text-muted); font-size: 0.9rem; }
+    .input-zone .icon { font-size: 2.5rem; margin-bottom: 0.5rem; display: block; }
+
+    .progress-container { margin: 1.5rem 0; display: none; }
+    .progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.3s ease; }
+    .progress-text { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem; display: flex; justify-content: space-between; }
+
+    .output-section { margin-top: 1.5rem; display: none; }
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .tab {
+      padding: 0.5rem 1rem;
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .panel { display: none; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; min-height: 300px; max-height: 60vh; overflow: auto; }
+    .panel.active { display: block; }
+    .panel pre { white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.95rem; margin: 0; }
+    .panel img { max-width: 100%; height: auto; border-radius: 4px; margin: 0.5rem 0; }
+
+    .actions { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+    .btn {
+      padding: 0.75rem 1.25rem;
+      border: none;
+      border-radius: 8px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+      font-size: 0.95rem;
+    }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+    .btn-secondary { background: var(--surface-hover); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      z-index: 1000;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .toast.success { border-left: 4px solid var(--success); }
+    .toast.error { border-left: 4px solid var(--error); }
+    .toast.info { border-left: 4px solid var(--accent); }
+
+    .status-log { margin-top: 1rem; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); background: var(--bg); padding: 0.75rem; border-radius: 8px; max-height: 150px; overflow-y: auto; display: none; }
+    .status-log div { margin-bottom: 0.25rem; }
+    .status-log .warn { color: var(--warning); }
+    .status-log .err { color: var(--error); }
+
+    @media (max-width: 600px) {
+      .container { padding: 1.25rem; }
+      .actions { flex-direction: column; }
+      .btn { width: 100%; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📄 Media → Markdown Converter</h1>
+      <p>Upload, paste, or drag & drop files. Extracts text from PDFs, images, and raw formats.</p>
+    </header>
+
+    <div class="input-zone" id="dropZone">
+      <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.md,.csv,.html,.doc,.docx">
+      <span class="icon">📁</span>
+      <p><strong>Click to upload</strong> or drag & drop here</p>
+      <p>Supports: PDF, Images, TXT, MD, CSV, HTML, DOC/DOCX</p>
+      <p style="margin-top:0.5rem; font-size:0.8rem;">💡 You can also paste images/text directly using Ctrl+V / Cmd+V</p>
+    </div>
+
+    <div class="progress-container" id="progressContainer">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-text">
+        <span id="progressStatus">Initializing...</span>
+        <span id="progressPercent">0%</span>
+      </div>
+    </div>
+
+    <div class="status-log" id="statusLog"></div>
+
+    <div class="output-section" id="outputSection">
+      <div class="tabs">
+        <button class="tab active" data-target="rawPanel">Raw Markdown</button>
+        <button class="tab" data-target="previewOutput">Rendered Preview</button>
+      </div>
+      <div class="panel active" id="rawPanel"><pre id="rawOutput"></pre></div>
+      <div class="panel" id="previewOutput"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="clearBtn">🗑️ Clear</button>
+        <button class="btn btn-secondary" id="copyBtn">📋 Copy to Clipboard</button>
+        <button class="btn btn-primary" id="downloadBtn">⬇️ Download .md</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // Configure PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressFill = document.getElementById('progressFill');
+    const progressStatus = document.getElementById('progressStatus');
+    const progressPercent = document.getElementById('progressPercent');
+    const statusLog = document.getElementById('statusLog');
+    const outputSection = document.getElementById('outputSection');
+    const rawOutput = document.getElementById('rawOutput');
+    const previewOutput = document.getElementById('previewOutput');
+    const tabs = document.querySelectorAll('.tab');
+    const panels = document.querySelectorAll('.panel');
+    const copyBtn = document.getElementById('copyBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const toast = document.getElementById('toast');
+
+    let currentMarkdown = '';
+
+    // --- Layout-aware text extraction helpers ---
+
+    function groupItemsIntoLines(items, yTolerance) {
+      const positioned = items.map(item => ({
+        text: item.str,
+        x: Math.round(item.transform[4]),
+        y: Math.round(item.transform[5]),
+        height: Math.abs(item.transform[3]),
+        width: item.width || 0,
+        hasEOL: item.hasEOL
+      }));
+
+      if (positioned.length === 0) return [];
+
+      const heights = positioned.map(i => i.height).filter(h => h > 0);
+      if (yTolerance === undefined) {
+        const sorted = heights.sort((a, b) => a - b);
+        const medianHeight = sorted[Math.floor(sorted.length / 2)] || 12;
+        yTolerance = Math.max(3, medianHeight * 0.4);
+      }
+
+      positioned.sort((a, b) => b.y - a.y || a.x - b.x);
+
+      const lines = [];
+      let currentLine = [];
+      let currentY = null;
+
+      for (const item of positioned) {
+        if (currentY === null || Math.abs(item.y - currentY) <= yTolerance) {
+          currentLine.push(item);
+          if (currentY === null) currentY = item.y;
+        } else {
+          if (currentLine.length > 0) {
+            currentLine.sort((a, b) => a.x - b.x);
+            lines.push({ y: currentY, items: currentLine });
+          }
+          currentLine = [item];
+          currentY = item.y;
+        }
+      }
+      if (currentLine.length > 0) {
+        currentLine.sort((a, b) => a.x - b.x);
+        lines.push({ y: currentY, items: currentLine });
+      }
+
+      return lines;
+    }
+
+    function detectTableFromLines(lines) {
+      if (lines.length < 3) return null;
+      const multi = lines.filter(l => l.items.length >= 2);
+      if (multi.length < 2) return null;
+
+      const itemCounts = multi.map(l => l.items.length);
+      const counts = {};
+      itemCounts.forEach(c => counts[c] = (counts[c] || 0) + 1);
+      const mode = parseInt(Object.entries(counts).sort((a,b) => b[1] - a[1])[0][0]);
+      if (mode < 2) return null;
+
+      const tableRows = multi.filter(l => l.items.length === mode);
+      if (tableRows.length < 2) return null;
+
+      const tolerance = 15;
+      for (let col = 0; col < mode; col++) {
+        const xs = tableRows.map(r => r.items[col].x);
+        const sorted = [...xs].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        const bad = xs.filter(x => Math.abs(x - median) > tolerance);
+        if (bad.length > xs.length * 0.3) return null;
+      }
+
+      return {
+        headers: tableRows[0].items.map(i => i.text.trim().replace(/\n/g, ' ').replace(/\|/g, '\\|')),
+        rows: tableRows.slice(1).map(row => row.items.map(i => i.text.trim().replace(/\n/g, ' ').replace(/\|/g, '\\|')))
+      };
+    }
+
+    function tableToMarkdown(headers, rows) {
+      if (!headers || headers.length === 0) return '';
+      const sep = headers.map(() => '---').join(' | ');
+      const hdr = headers.join(' | ');
+      const body = rows.map(r => r.join(' | ')).join('\n');
+      return `| ${hdr} |\n| ${sep} |\n${body ? body.split('\n').map(r => `| ${r} |`).join('\n') : ''}`;
+    }
+
+    function linesToMarkdown(lines) {
+      const table = detectTableFromLines(lines);
+      if (table) {
+        try { return tableToMarkdown(table.headers, table.rows); } catch(e) {}
+      }
+      return lines.map(line =>
+        line.items.map(i => i.text).join(' ')
+      ).join('\n');
+    }
+
+    function ocrWordsToMarkdown(words) {
+      if (!words || words.length === 0) return '';
+
+      const lineGroups = new Map();
+      words.forEach(w => {
+        const ln = w.line_num || 0;
+        if (!lineGroups.has(ln)) lineGroups.set(ln, []);
+        lineGroups.get(ln).push(w);
+      });
+
+      const sortedLines = [...lineGroups.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, words]) => words.sort((a, b) => (a.bbox?.x0 || 0) - (b.bbox?.x0 || 0)));
+
+      const filtered = sortedLines.filter(line => line.some(w => w.text.trim()));
+      if (filtered.length < 2) return (filtered[0] || []).map(w => w.text).join(' ') || '';
+
+      // Method 1: mode-based with X-alignment check
+      const colCounts = filtered.map(line => line.length);
+      const modeCounts = {};
+      colCounts.forEach(c => modeCounts[c] = (modeCounts[c] || 0) + 1);
+      const mode = parseInt(Object.entries(modeCounts).sort((a,b) => b[1] - a[1])[0][0]);
+
+      if (mode >= 2) {
+        const tableLines = filtered.filter(line => line.length === mode);
+        if (tableLines.length >= 2) {
+          let aligned = true;
+          for (let col = 0; col < mode && aligned; col++) {
+            const xs = tableLines.map(line => line[col]?.bbox?.x0 || 0);
+            const sorted = [...xs].sort((a, b) => a - b);
+            const median = sorted[Math.floor(sorted.length / 2)];
+            const bad = xs.filter(x => Math.abs(x - median) > 20);
+            if (bad.length > xs.length * 0.4) aligned = false;
+          }
+          if (aligned) {
+            const headers = tableLines[0].map(w => w.text.trim().replace(/\|/g, '\\|'));
+            const rows = tableLines.slice(1).map(line => line.map(w => w.text.trim().replace(/\|/g, '\\|')));
+            try { return tableToMarkdown(headers, rows); } catch(e) {}
+          }
+        }
+      }
+
+      // Method 2: gap-based column detection
+      const multi = filtered.filter(l => l.length >= 2);
+      if (multi.length >= 3) {
+        const gapPositions = multi.map(line => {
+          const gaps = [];
+          for (let i = 0; i < line.length - 1; i++) {
+            const gx = (line[i].bbox.x1 + line[i + 1].bbox.x0) / 2;
+            gaps.push(gx);
+          }
+          return gaps;
+        });
+
+        const allGaps = gapPositions.flat();
+        const clusters = [];
+        for (const gx of allGaps) {
+          let found = false;
+          for (const c of clusters) {
+            if (Math.abs(c.cx - gx) <= 15) {
+              c.cx = (c.cx * c.n + gx) / (c.n + 1);
+              c.n++;
+              found = true;
+              break;
+            }
+          }
+          if (!found) clusters.push({ cx: gx, n: 1 });
+        }
+
+        const sig = clusters.filter(c => c.n >= multi.length * 0.5).sort((a, b) => a.cx - b.cx);
+        if (sig.length >= 1) {
+          const boundaries = [-Infinity, ...sig.map(c => c.cx), Infinity];
+          const rows = filtered.map(line => {
+            const cells = new Array(boundaries.length - 1).fill('');
+            for (const w of line) {
+              const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+              for (let ci = 0; ci < boundaries.length - 1; ci++) {
+                if (cx > boundaries[ci] && cx <= boundaries[ci + 1]) {
+                  cells[ci] += (cells[ci] ? ' ' : '') + w.text.trim();
+                  break;
+                }
+              }
+            }
+            return cells;
+          }).filter(r => r.some(c => c));
+          if (rows.length >= 2) {
+            const hdr = rows[0].map(c => c.replace(/\|/g, '\\|'));
+            const body = rows.slice(1).map(r => r.map(c => c.replace(/\|/g, '\\|')));
+            try { return tableToMarkdown(hdr, body); } catch(e) {}
+          }
+        }
+      }
+
+      return filtered.map(line => line.map(w => w.text).join(' ')).join('\n');
+    }
+
+    function preprocessCanvas(canvas) {
+      const ctx = canvas.getContext('2d');
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      const len = data.length;
+      const total = len / 4;
+
+      const hist = new Array(256).fill(0);
+      for (let i = 0; i < len; i += 4) {
+        const g = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        data[i] = g; data[i + 1] = g; data[i + 2] = g;
+        hist[g]++;
+      }
+
+      let sum = 0;
+      for (let t = 0; t < 256; t++) sum += t * hist[t];
+
+      let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t];
+        if (wB === 0) continue;
+        const wF = total - wB;
+        if (wF === 0) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB;
+        const mF = (sum - sumB) / wF;
+        const v = wB * wF * (mB - mF) ** 2;
+        if (v > maxVar) { maxVar = v; thresh = t; }
+      }
+
+      for (let i = 0; i < len; i += 4) {
+        const v = data[i] < thresh ? 0 : 255;
+        data[i] = v; data[i + 1] = v; data[i + 2] = v;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      return canvas;
+    }
+
+    function postProcessMarkdown(text, file) {
+      if (!text || text.trim().length < 20) return text;
+
+      let result = text;
+
+      // Collapse 3+ consecutive blank lines to 2
+      result = result.replace(/\n{4,}/g, '\n\n\n');
+
+      // Remove trailing whitespace per line
+      result = result.replace(/[ \t]+\n/g, '\n');
+
+      // Detect potential tables in raw text: lines with 2+ pipe or tab-separated values
+      const lines = result.split('\n');
+      let hasPipeTable = false;
+      let hasWhitespaceTable = false;
+      let tableStart = -1;
+      const newLines = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const pipeCount = (line.match(/\|/g) || []).length;
+        if (pipeCount >= 2 && !line.startsWith('|')) {
+          hasPipeTable = true;
+        }
+        // Detect whitespace-aligned data that isn't already a markdown table
+        if (!line.startsWith('|') && !line.startsWith('>') && !line.startsWith('#')) {
+          const trimmed = line.trim();
+          if (trimmed.length > 20) {
+            const segments = trimmed.split(/\s{3,}/);
+            if (segments.length >= 3) {
+              hasWhitespaceTable = true;
+            }
+          }
+        }
+      }
+
+      return result;
+    }
+
+    function estimateQuality(text, totalPages) {
+      if (!text || text.trim().length === 0) return { score: 0, msg: 'No output produced' };
+      const lines = text.split('\n').filter(l => l.trim());
+      const wordCount = text.split(/\s+/).length;
+      if (totalPages && lines.length < totalPages * 2 && wordCount < totalPages * 10) {
+        return { score: 1, msg: `⚠️ Output seems sparse: ${wordCount} words across ${totalPages} pages. OCR may have struggled.` };
+      }
+      return { score: 2, msg: '' };
+    }
+
+    // UI Helpers
+    function showToast(msg, type = 'info') {
+      toast.textContent = msg;
+      toast.className = `toast ${type} show`;
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    function log(msg, type = '') {
+      statusLog.style.display = 'block';
+      const div = document.createElement('div');
+      div.textContent = msg;
+      if (type) div.className = type;
+      statusLog.prepend(div);
+    }
+
+    function updateProgress(percent, status) {
+      progressFill.style.width = `${percent}%`;
+      progressStatus.textContent = status;
+      progressPercent.textContent = `${Math.round(percent)}%`;
+    }
+
+    function showOutput(text, totalPages) {
+      const cleaned = postProcessMarkdown(text);
+      currentMarkdown = cleaned;
+      rawOutput.textContent = cleaned;
+      previewOutput.innerHTML = marked.parse(cleaned);
+      outputSection.style.display = 'block';
+      updateProgress(100, 'Complete');
+      showToast('✅ Conversion successful!', 'success');
+      const q = estimateQuality(cleaned, totalPages);
+      if (q.score < 2) log(q.msg, 'warn');
+    }
+
+    // File Handling
+    async function handleFile(file) {
+      if (!file) return;
+      progressContainer.style.display = 'block';
+      statusLog.innerHTML = '';
+      outputSection.style.display = 'none';
+      updateProgress(5, 'Reading file...');
+
+      const ext = file.name.split('.').pop().toLowerCase();
+      const mime = file.type;
+
+      try {
+        if (file.size > 50 * 1024 * 1024) {
+          throw new Error('File too large (max 50MB). For large PDFs, consider splitting into smaller files first.');
+        }
+        if (ext === 'pdf' || mime === 'application/pdf') {
+          await processPDF(file);
+        } else if (mime.startsWith('image/')) {
+          await processImage(file);
+        } else if (mime.startsWith('text/') || ext === 'md' || ext === 'txt' || ext === 'csv' || ext === 'html' || ext === 'doc' || ext === 'docx') {
+          await processText(file, mime, ext);
+        } else {
+          throw new Error('Unsupported file format. Please use PDF, Image, TXT, MD, CSV, or HTML.');
+        }
+      } catch (err) {
+        log(`❌ ${err.message}`, 'err');
+        showToast(`Error: ${err.message}`, 'error');
+        progressContainer.style.display = 'none';
+      }
+    }
+
+    async function processText(file, mime, ext) {
+      updateProgress(15, 'Extracting text...');
+      const reader = new FileReader();
+      reader.onload = e => showOutput(e.target.result);
+      reader.onerror = () => { throw new Error('Failed to read file.'); };
+      reader.readAsText(file);
+    }
+
+    async function processPDF(file) {
+      log('📄 Detected PDF. Extracting text layers...');
+      updateProgress(10, 'Loading PDF engine...');
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let text = '';
+      let totalTextLen = 0;
+      const totalPages = pdf.numPages;
+
+      for (let i = 1; i <= totalPages; i++) {
+        updateProgress(10 + (i/totalPages)*40, `Extracting page ${i}/${totalPages}...`);
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+
+        const lines = groupItemsIntoLines(content.items);
+        const pageText = linesToMarkdown(lines);
+
+        text += `# Page ${i}\n\n${pageText}\n\n`;
+        totalTextLen += pageText.replace(/\s/g, '').length;
+      }
+
+      if (totalTextLen < 50) {
+        log('⚠️ Text layer is minimal. Switching to OCR + layout analysis...', 'warn');
+        updateProgress(50, 'Rendering pages for OCR...');
+        text = '';
+        for (let i = 1; i <= totalPages; i++) {
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 2.5 });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+          await page.render({ canvasContext: ctx, viewport }).promise;
+
+          log(`🖼️ Preprocessing page ${i} for OCR...`);
+          updateProgress(50 + (i/totalPages)*5, `Preprocessing page ${i}...`);
+          preprocessCanvas(canvas);
+
+          updateProgress(55 + (i/totalPages)*40, `OCR page ${i}/${totalPages}...`);
+          const result = await Tesseract.recognize(canvas, 'eng', {
+            logger: m => {
+              if (m.status === 'recognizing text') {
+                const pct = 55 + (i/totalPages)*30 + (m.progress * 10);
+                updateProgress(Math.min(pct, 95), `OCR ${Math.round(m.progress * 100)}%`);
+              }
+            }
+          });
+
+          const pageMd = ocrWordsToMarkdown(result.data.words);
+          text += `# Page ${i}\n\n${pageMd || result.data.text}\n\n`;
+        }
+      }
+      showOutput(text.trim(), totalPages);
+    }
+
+    async function processImage(file) {
+      log('🖼️ Detected Image. Preprocessing + OCR with layout analysis...');
+      updateProgress(15, 'Loading image...');
+
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = url;
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+
+      log('⚙️ Preprocessing image for better OCR accuracy...');
+      updateProgress(30, 'Preprocessing...');
+      preprocessCanvas(canvas);
+
+      updateProgress(35, 'Running OCR...');
+      const result = await Tesseract.recognize(canvas, 'eng', {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            updateProgress(35 + m.progress * 60, `OCR ${Math.round(m.progress * 100)}%`);
+          }
+        }
+      });
+
+      log('🔍 Analyzing layout for tables...');
+      const md = ocrWordsToMarkdown(result.data.words);
+      showOutput(md || result.data.text.trim());
+    }
+
+    // Event Listeners
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+    ['dragenter', 'dragover'].forEach(evt => dropZone.addEventListener(evt, e => { e.preventDefault(); dropZone.classList.add('dragover'); }));
+    ['dragleave', 'drop'].forEach(evt => dropZone.addEventListener(evt, e => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
+    dropZone.addEventListener('drop', e => {
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+
+    window.addEventListener('paste', e => {
+      const items = Array.from(e.clipboardData.items);
+      const fileItem = items.find(i => i.type.startsWith('image/'));
+      const textItem = items.find(i => i.type === 'text/plain');
+
+      if (fileItem) {
+        const file = fileItem.getAsFile();
+        handleFile(file);
+      } else if (textItem) {
+        textItem.getAsString(str => showOutput(str.trim()));
+      } else {
+        showToast('⚠️ Pasted content not supported. Try pasting text or an image.', 'error');
+      }
+    });
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        panels.forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.target).classList.add('active');
+      });
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(currentMarkdown);
+        showToast('✅ Copied to clipboard!', 'success');
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = currentMarkdown;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('✅ Copied to clipboard!', 'success');
+      }
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      const blob = new Blob([currentMarkdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `converted_${new Date().toISOString().slice(0,10)}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('⬇️ Download started!', 'success');
+    });
+
+    clearBtn.addEventListener('click', () => {
+      fileInput.value = '';
+      progressContainer.style.display = 'none';
+      outputSection.style.display = 'none';
+      statusLog.innerHTML = '';
+      statusLog.style.display = 'none';
+      currentMarkdown = '';
+      showToast('🗑️ Cleared.', 'info');
+    });
+  </script>
+</body>
+</html>
